@@ -58,7 +58,7 @@ def get_llm(
         )
 
     cfg = _DEFAULTS[provider]
-    model = model or cfg["model"]
+    model = model or os.getenv("LLM_MODEL") or cfg["model"]
 
     api_key = os.getenv(cfg["env_key"])
     if not api_key:
@@ -70,7 +70,11 @@ def get_llm(
     if provider == "groq":
         from langchain_groq import ChatGroq
 
-        return ChatGroq(model=model, temperature=temperature, api_key=api_key)
+        # Retry transient network errors / 429s with backoff so a single blip
+        # doesn't abort the whole multi-step run.
+        return ChatGroq(
+            model=model, temperature=temperature, api_key=api_key, max_retries=5
+        )
 
     if provider == "gemini":
         from langchain_google_genai import ChatGoogleGenerativeAI
