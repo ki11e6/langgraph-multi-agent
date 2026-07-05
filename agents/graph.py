@@ -16,6 +16,7 @@ iterations is reached.
 
 from __future__ import annotations
 
+import re
 from typing import Annotated, Literal
 
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage
@@ -42,6 +43,7 @@ class AgentState(BaseModel):
     review_feedback: str = ""
     next_agent: str = "researcher"
     revision_count: int = 0
+    verdict: str = ""
 
 
 # ---------------------------------------------------------------------------
@@ -60,14 +62,13 @@ def supervisor_node(state: AgentState) -> dict:
             "Agents:\n"
             "  - researcher: gathers information from the web\n"
             "  - writer: drafts a report from research notes\n"
-            "  - reviewer: critiques the draft\n"
-            "  - FINISH: the task is complete\n\n"
+            "  - reviewer: critiques the draft\n\n"
             "Rules:\n"
             "  1. If there are no research notes yet, pick 'researcher'.\n"
             "  2. If there are research notes but no draft, pick 'writer'.\n"
-            "  3. If there is a draft but no review, pick 'reviewer'.\n"
-            "  4. If the review says 'ACCEPT', pick 'FINISH'.\n"
-            "  5. If the review says 'REVISE', pick 'writer'.\n\n"
+            "  3. If there is a draft, pick 'reviewer'.\n\n"
+            "The reviewer decides when the work is complete -- you never finish "
+            "the task yourself.\n\n"
             "Respond with ONLY the agent name (one word)."
         )
     )
@@ -77,8 +78,6 @@ def supervisor_node(state: AgentState) -> dict:
         context_parts.append(f"Research notes:\n{state.research_notes[:2000]}")
     if state.draft:
         context_parts.append(f"Current draft:\n{state.draft[:2000]}")
-    if state.review_feedback:
-        context_parts.append(f"Review feedback:\n{state.review_feedback}")
 
     human = HumanMessage(
         content=(
@@ -108,7 +107,6 @@ def supervisor_node(state: AgentState) -> dict:
 
 def researcher_node(state: AgentState) -> dict:
     """Use tools to research the user's query."""
-    llm = get_llm()
     query = state.messages[0].content if state.messages else "general research"
 
     # Step 1 -- web search
@@ -176,9 +174,19 @@ def reviewer_node(state: AgentState) -> dict:
     response = llm.invoke([system, human])
     feedback = response.content
 
+    # Find the verdict by scanning lines from the end for a standalone ACCEPT /
+    # REVISE token. Tokenising avoids substring false-positives ("UNACCEPTABLE",
+    # "not accepted"), and scanning past trailing commentary avoids missing a
+    # real verdict that isn't on the very last line.
     verdict = "REVISE"
-    if "ACCEPT" in feedback.upper().split("\n")[-1]:
-        verdict = "ACCEPT"
+    for line in reversed(feedback.upper().splitlines()):
+        tokens = re.findall(r"[A-Z]+", line)
+        if "REVISE" in tokens:
+            break
+        if "ACCEPT" in tokens:
+            if "NOT" not in tokens:
+                verdict = "ACCEPT"
+            break
 
     # Enforce maximum revision count
     revision_count = state.revision_count + 1
@@ -189,6 +197,7 @@ def reviewer_node(state: AgentState) -> dict:
     return {
         "review_feedback": feedback,
         "revision_count": revision_count,
+        "verdict": verdict,
         "messages": [AIMessage(content=f"[Reviewer] Verdict: {verdict}\n{feedback}")],
     }
 
@@ -209,9 +218,16 @@ def route_supervisor(state: AgentState) -> Literal["researcher", "writer", "revi
     return END
 
 
-def route_after_review(state: AgentState) -> Literal["supervisor"]:
-    """Always return to the supervisor after a review."""
-    return "supervisor"
+def route_after_review(state: AgentState) -> Literal["writer", "__end__"]:
+    """Decide the loop's fate directly from the reviewer's verdict.
+
+    Termination is deterministic here -- not delegated to the LLM supervisor --
+    so an ACCEPT (or hitting ``MAX_REVISIONS``) reliably ends the run instead of
+    depending on the supervisor to re-read the feedback prose correctly.
+    """
+    if state.verdict == "ACCEPT" or state.revision_count >= MAX_REVISIONS:
+        return END
+    return "writer"
 
 
 # ---------------------------------------------------------------------------
@@ -244,9 +260,19 @@ def build_graph() -> StateGraph:
         },
     )
 
-    # After each specialist, return to supervisor
+    # Researcher and writer report back to the supervisor for sequencing.
     graph.add_edge("researcher", "supervisor")
     graph.add_edge("writer", "supervisor")
-    graph.add_edge("reviewer", "supervisor")
+
+    # The reviewer decides termination deterministically -- accept ends the run,
+    # revise loops back to the writer -- without a supervisor round-trip.
+    graph.add_conditional_edges(
+        "reviewer",
+        route_after_review,
+        {
+            "writer": "writer",
+            END: END,
+        },
+    )
 
     return graph.compile()
