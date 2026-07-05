@@ -15,6 +15,7 @@ from agents import graph as graph_module
 from agents.graph import (
     MAX_REVISIONS,
     AgentState,
+    _as_text,
     build_graph,
     reviewer_node,
     route_after_review,
@@ -113,6 +114,25 @@ def test_reviewer_empty_feedback_defaults_to_revise(monkeypatch):
     monkeypatch.setattr(graph_module, "get_llm", lambda: _FakeLLM("   \n\n"))
     out = reviewer_node(AgentState(draft="d"))
     assert out["verdict"] == "REVISE"
+
+
+# ---------------------------------------------------------------------------
+# D3 -- non-string message content (Anthropic/Gemini blocks) is handled
+# ---------------------------------------------------------------------------
+
+
+def test_as_text_flattens_content_blocks():
+    assert _as_text("plain") == "plain"
+    assert _as_text([{"type": "text", "text": "a"}, {"type": "text", "text": "b"}]) == "ab"
+    assert _as_text(["x", "y"]) == "xy"
+
+
+def test_reviewer_handles_block_content(monkeypatch):
+    """A provider returning content as blocks must not crash the parse."""
+    blocks = [{"type": "text", "text": "Good draft.\nACCEPT"}]
+    monkeypatch.setattr(graph_module, "get_llm", lambda: _FakeLLM(blocks))
+    out = reviewer_node(AgentState(draft="d"))
+    assert out["verdict"] == "ACCEPT"
 
 
 # ---------------------------------------------------------------------------

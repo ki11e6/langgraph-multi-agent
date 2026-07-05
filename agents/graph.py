@@ -34,6 +34,26 @@ from agents.tools import summarize, web_search
 MAX_REVISIONS = 3
 
 
+def _as_text(content) -> str:
+    """Flatten a chat message's ``content`` to plain text.
+
+    Groq/OpenAI return a ``str``, but Anthropic and Gemini can return a list of
+    content blocks; downstream code (``.strip()``, ``.splitlines()``, ``len()``)
+    assumes a string, so normalise here.
+    """
+    if isinstance(content, str):
+        return content
+    parts: list[str] = []
+    for block in content:
+        if isinstance(block, str):
+            parts.append(block)
+        elif isinstance(block, dict):
+            parts.append(block.get("text", ""))
+        else:
+            parts.append(str(block))
+    return "".join(parts)
+
+
 class AgentState(BaseModel):
     """Shared state flowing through the graph."""
 
@@ -87,7 +107,7 @@ def supervisor_node(state: AgentState) -> dict:
     )
 
     response = llm.invoke([system, human])
-    next_agent = response.content.strip().lower().replace("'", "").replace('"', "")
+    next_agent = _as_text(response.content).strip().lower().replace("'", "").replace('"', "")
 
     # Normalise common LLM responses
     if "finish" in next_agent:
@@ -145,7 +165,7 @@ def writer_node(state: AgentState) -> dict:
     )
 
     response = llm.invoke([system, human])
-    draft = response.content
+    draft = _as_text(response.content)
 
     # Clear the consumed feedback so the supervisor routes the fresh draft back
     # to the reviewer instead of looping straight to the writer again.
@@ -172,7 +192,7 @@ def reviewer_node(state: AgentState) -> dict:
     human = HumanMessage(content=f"Draft:\n{state.draft}")
 
     response = llm.invoke([system, human])
-    feedback = response.content
+    feedback = _as_text(response.content)
 
     # Find the verdict by scanning lines from the end for a standalone ACCEPT /
     # REVISE token. Tokenising avoids substring false-positives ("UNACCEPTABLE",
