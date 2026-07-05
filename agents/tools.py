@@ -54,8 +54,17 @@ def _fetch_text(url: str) -> str:
     try:
         import httpx
 
-        resp = httpx.get(url, timeout=_FETCH_TIMEOUT_SECONDS, follow_redirects=True)
+        # A browser-like UA avoids the blanket 403s many sites return to
+        # default clients, which would otherwise silently gut our grounding.
+        headers = {"User-Agent": "Mozilla/5.0 (compatible; research-assistant/1.0)"}
+        resp = httpx.get(
+            url, timeout=_FETCH_TIMEOUT_SECONDS, follow_redirects=True, headers=headers
+        )
         resp.raise_for_status()
+        # Only parse HTML/text; binary (PDF, images) would decode to junk.
+        content_type = resp.headers.get("content-type", "")
+        if "html" not in content_type and "text" not in content_type:
+            return ""
         parser = _TextExtractor()
         parser.feed(resp.text)
         return parser.text()[:_MAX_CONTENT_CHARS]

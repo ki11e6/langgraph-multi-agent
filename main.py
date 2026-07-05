@@ -72,12 +72,15 @@ def main() -> None:
                             preview += "..."
                         print(preview)
     except GraphRecursionError:
-        # The agents failed to converge within LangGraph's step budget. Surface
-        # the best draft produced so far instead of crashing with a traceback.
-        print(
-            "\n[!] The agents did not converge within the step limit. "
-            "Returning the latest draft produced so far."
-        )
+        # The agents failed to converge within LangGraph's step budget. The latest
+        # draft may never have passed the grounding gate, so refuse rather than
+        # print an unvalidated report.
+        print(f"\n{'=' * 60}")
+        print("  ⚠ DID NOT CONVERGE — no answer produced")
+        print(f"{'=' * 60}\n")
+        print(f"Query: {args.query!r}")
+        print("The agents did not converge within the step limit.")
+        sys.exit(1)
 
     # Refuse rather than ship an ungrounded answer.
     if validation_error:

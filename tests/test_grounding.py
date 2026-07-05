@@ -28,7 +28,7 @@ def _sources(n: int) -> list[dict]:
 
 
 def test_validate_refuses_when_no_sources():
-    out = validate_node(AgentState(draft="A claim [1].", sources=[]))
+    out = validate_node(AgentState(draft="A claim [^1].", sources=[]))
     assert out["validation_error"]  # non-empty => refuse
 
 
@@ -39,14 +39,28 @@ def test_validate_refuses_draft_without_citations():
 
 
 def test_validate_refuses_dangling_citation():
-    # Draft cites [5] but only 2 sources exist -> fabricated/dangling reference.
-    out = validate_node(AgentState(draft="Per the docs [5], do X.", sources=_sources(2)))
+    # Draft cites [^5] but only 2 sources exist -> fabricated/dangling reference.
+    out = validate_node(AgentState(draft="Per the docs [^5], do X.", sources=_sources(2)))
     assert out["validation_error"]
 
 
 def test_validate_passes_grounded_draft():
-    out = validate_node(AgentState(draft="First [1]. Second [2].", sources=_sources(2)))
+    out = validate_node(AgentState(draft="First [^1]. Second [^2].", sources=_sources(2)))
     assert out["validation_error"] == ""
+
+
+def test_validate_ignores_plain_brackets():
+    # Status codes / array indices must NOT be mistaken for citations (P3).
+    draft = "Returns [404] on error and reads arr[0], per the guide [^1]."
+    out = validate_node(AgentState(draft=draft, sources=_sources(1)))
+    assert out["validation_error"] == ""
+
+
+def test_validate_refuses_citation_to_empty_content_source():
+    # Cited index is valid but that source has no retrieved content (P2).
+    sources = [{"title": "T", "url": "https://ex/1", "snippet": "", "content": ""}]
+    out = validate_node(AgentState(draft="Grounded claim [^1].", sources=sources))
+    assert out["validation_error"]
 
 
 # ---------------------------------------------------------------------------
@@ -120,3 +134,37 @@ def test_researcher_populates_sources(monkeypatch):
     assert out["sources"] == fake
     assert "grounded text" in out["research_notes"]
     assert "https://ex/doc" in out["research_notes"]
+
+
+# ---------------------------------------------------------------------------
+# Full-graph refusal: an ungrounded draft ends the run at `validate`
+# ---------------------------------------------------------------------------
+
+
+def _tool(result):
+    return type("Tool", (), {"invoke": staticmethod(lambda _q: result)})()
+
+
+def test_graph_refuses_when_writer_produces_no_citations(monkeypatch):
+    from langchain_core.messages import AIMessage, HumanMessage
+
+    def llm(messages):
+        system = messages[0].content
+        human = messages[1].content if len(messages) > 1 else ""
+        if "supervisor of a research team" in system:
+            if "Research notes:" in human:
+                return AIMessage(content="writer")
+            return AIMessage(content="researcher")
+        if "skilled technical writer" in system:
+            return AIMessage(content="A confident claim with no citation at all.")
+        return AIMessage(content="ACCEPT")  # reviewer would accept, but validate gates first
+
+    monkeypatch.setattr(
+        graph_module, "get_llm", lambda: type("L", (), {"invoke": staticmethod(llm)})()
+    )
+    one_source = [{"title": "T", "url": "https://ex/1", "snippet": "s", "content": "c"}]
+    monkeypatch.setattr(graph_module, "web_search", _tool(one_source))
+
+    final = graph_module.build_graph().invoke({"messages": [HumanMessage(content="q")]})
+    assert final["validation_error"]  # refused
+    assert final.get("verdict", "") == ""  # never reached the reviewer

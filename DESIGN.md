@@ -73,8 +73,9 @@ graph on ACCEPT or `MAX_REVISIONS`. (Committed on `fix/loop-termination`.)
 ### Phase 1 — Grounding (the core fix) ✅ (done)
 
 **As built** (a few deliberate deviations from the original sketch below):
-- Citations are inline `[n]` markers, not `(claim, [source_id])` tuples — deterministic
-  to check with a regex, no fragile structured-output parsing.
+- Citations are footnote-style `[^n]` markers, not `(claim, [source_id])` tuples —
+  deterministic to check with a regex, and `[^n]` avoids colliding with plain brackets
+  in prose/code (`[404]`, `arr[0]`).
 - The `validate` node checks citation **presence + validity** (no sources / no citations /
   dangling index), not semantic entailment — that stays future work.
 - Kept the Phase 0 force-accept terminal (didn't invert `MAX_REVISIONS`); the `validate`

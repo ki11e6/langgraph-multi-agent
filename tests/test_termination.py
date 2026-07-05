@@ -125,6 +125,7 @@ def test_as_text_flattens_content_blocks():
     assert _as_text("plain") == "plain"
     assert _as_text([{"type": "text", "text": "a"}, {"type": "text", "text": "b"}]) == "ab"
     assert _as_text(["x", "y"]) == "xy"
+    assert _as_text(None) == ""  # tool-only / filtered responses must not crash
 
 
 def test_reviewer_handles_block_content(monkeypatch):
@@ -153,7 +154,7 @@ def _role_aware_llm(messages):
     if "meticulous editor" in system:
         return AIMessage(content="Not there yet.\nREVISE")  # never accepts on its own
     if "skilled technical writer" in system:
-        return AIMessage(content="A draft paragraph grounded in a source [1].")
+        return AIMessage(content="A draft paragraph grounded in a source [^1].")
     return AIMessage(content="FINISH")
 
 
@@ -200,7 +201,7 @@ def test_graph_ends_early_on_accept(monkeypatch):
         if "meticulous editor" in system:
             return AIMessage(content="Looks great.\nACCEPT")  # accepts first pass
         if "skilled technical writer" in system:
-            return AIMessage(content="A draft paragraph grounded in a source [1].")
+            return AIMessage(content="A draft paragraph grounded in a source [^1].")
         return AIMessage(content="FINISH")
 
     monkeypatch.setattr(

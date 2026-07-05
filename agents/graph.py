@@ -41,6 +41,8 @@ def _as_text(content) -> str:
     content blocks; downstream code (``.strip()``, ``.splitlines()``, ``len()``)
     assumes a string, so normalise here.
     """
+    if content is None:
+        return ""
     if isinstance(content, str):
         return content
     parts: list[str] = []
@@ -141,7 +143,7 @@ def researcher_node(state: AgentState) -> dict:
     sources = web_search.invoke(query)
 
     notes_parts = [
-        f"[{i}] {s.get('title', 'Untitled')}\n"
+        f"[^{i}] {s.get('title', 'Untitled')}\n"
         f"URL: {s.get('url', '')}\n"
         f"{s.get('content', '')}"
         for i, s in enumerate(sources, 1)
@@ -172,8 +174,9 @@ def writer_node(state: AgentState) -> dict:
             "report (3-5 paragraphs, markdown) using ONLY the numbered sources in "
             "the research notes.\n"
             "Rules:\n"
-            "  - Support every factual claim with an inline citation like [1] or "
-            "[2] referring to a source by its number.\n"
+            "  - Support every factual claim with a footnote-style citation like "
+            "[^1] or [^2] referring to a source by its number (matching the [^n] "
+            "labels in the notes).\n"
             "  - Do NOT invent APIs, class names, version numbers, or facts that "
             "are not present in the sources. If the sources do not cover something, "
             "say so explicitly rather than guessing.\n"
@@ -256,10 +259,15 @@ def validate_node(state: AgentState) -> dict:
     made this project hallucinate -- a confident report with no sources, no
     citations, or citations pointing at sources that don't exist.
     """
+    def _has_content(idx: int) -> bool:
+        return bool((state.sources[idx - 1].get("content") or "").strip())
+
     if not state.sources:
         error = "No sources were retrieved, so no grounded answer can be produced."
     else:
-        cited = {int(n) for n in re.findall(r"\[(\d+)\]", state.draft)}
+        # Footnote-style markers ([^1]) so plain brackets like [404] or arr[0]
+        # in prose/code aren't mistaken for citations.
+        cited = {int(n) for n in re.findall(r"\[\^(\d+)\]", state.draft)}
         n_sources = len(state.sources)
         if not cited:
             error = "The draft contains no citations to any source."
@@ -269,6 +277,9 @@ def validate_node(state: AgentState) -> dict:
                 f"The draft cites non-existent source(s) {dangling} "
                 f"(only {n_sources} retrieved)."
             )
+        elif any(not _has_content(n) for n in cited):
+            empty = sorted(n for n in cited if not _has_content(n))
+            error = f"The draft cites source(s) {empty} that have no retrieved content."
         else:
             error = ""
 
