@@ -8,10 +8,11 @@ It demonstrates the **supervisor / orchestrator-worker pattern** for agentic sys
 
 ## ✨ Features
 
-- **Multi-agent orchestration** — four cooperating agents modeled as nodes in a LangGraph `StateGraph`.
+- **Multi-agent orchestration** — cooperating agents modeled as nodes in a LangGraph `StateGraph`.
 - **Dynamic supervisor routing** — a coordinator node decides which agent runs next based on shared state, instead of a brittle hard-coded pipeline.
-- **Iterative refinement** — the Writer and Reviewer loop until the draft is accepted or a maximum revision count is reached, preventing runaway loops.
-- **Live web research** — the Researcher gathers up-to-date information using a keyless **DuckDuckGo** search tool, then condenses it.
+- **Grounded, cite-or-refuse output** — the Writer must cite retrieved sources inline (`[n]`); a **deterministic `validate` node** refuses to ship a draft that has no sources, no citations, or citations pointing at sources that don't exist. See the [incident write-up](docs/incident-hallucination.md) for *why*.
+- **Iterative refinement** — the Writer and Reviewer loop until the draft is accepted or `MAX_REVISIONS` is reached; termination is decided deterministically, so the loop provably halts.
+- **Live web research** — the Researcher retrieves keyless **DuckDuckGo** results and fetches the page text, carrying structured sources (title, URL, content) through the graph.
 - **Provider-agnostic LLM layer** — run on **Groq** (free, default), **Gemini**, **OpenAI**, or **Anthropic** by changing `LLM_PROVIDER`.
 - **Streaming output** — node-by-node progress is streamed to the terminal as the graph executes.
 - **Zero-cost by default** — Groq's free tier + keyless search means it runs without any paid API or credit card.
@@ -21,29 +22,35 @@ It demonstrates the **supervisor / orchestrator-worker pattern** for agentic sys
 ## 🏗️ Architecture
 
 ```mermaid
-flowchart LR
-    START((start)) --> SUP{{Supervisor}}
-
-    SUP -->|no notes| RES[Researcher]
-    SUP -->|notes, no draft| WRI[Writer]
-    SUP -->|draft, needs review| REV[Reviewer]
-    SUP -->|complete| FIN([END])
-
-    RES -->|research_notes| SUP
-    WRI -->|draft| SUP
-    REV -->|review_feedback| SUP
+graph TD;
+    __start__([start]) --> supervisor
+    supervisor -.->|no sources| researcher
+    supervisor -.->|sources, no draft| writer
+    researcher --> supervisor
+    writer --> validate
+    validate -.->|grounded| reviewer
+    validate -.->|ungrounded → refuse| __end__([END])
+    reviewer -.->|REVISE| writer
+    reviewer -.->|ACCEPT / max revisions| __end__
 ```
 
-The **Supervisor is a hub**: every worker reports back to it, and it re-decides the next step each time. The Writer↔Reviewer cycle (Writer → Supervisor → Reviewer → Supervisor → Writer …) is what enables iterative refinement, and LangGraph's support for **cycles** is what makes this possible (unlike a plain DAG pipeline).
+> This diagram is generated from the compiled graph itself:
+> `build_graph().get_graph().draw_mermaid()`.
+
+Two design choices worth calling out:
+
+- **The Supervisor sequences the early work** (research → first draft), but it does **not** own termination. Once a draft exists, control flows `writer → validate → reviewer`, and the **Reviewer's verdict deterministically ends the loop** (via `route_after_review`) rather than asking the LLM Supervisor to notice "ACCEPT." Delegating termination to the LLM was the original cause of a near-infinite loop.
+- **`validate` is a deterministic gate, not an agent.** The LLM *proposes* a draft; plain Python *disposes* on whether it's grounded enough to ship. An agent graph shouldn't be all model calls — some edges are boring, testable code. This is what turns "confident hallucination" into "grounded answer or honest refusal."
 
 ### Agent roles
 
 | Agent | Responsibility | Tools |
 |---|---|---|
-| **Supervisor** | Inspects shared state and routes work to the right specialist. Decides when the task is complete. | LLM-based routing |
-| **Researcher** | Searches the web for information relevant to the query and distils it into structured notes. | `web_search` (DuckDuckGo), `summarize` |
-| **Writer** | Transforms research notes into a clear, well-structured markdown report; incorporates reviewer feedback on revisions. | LLM generation |
-| **Reviewer** | Critiques the draft for accuracy, clarity, and completeness; issues an **ACCEPT** or **REVISE** verdict. | LLM evaluation |
+| **Supervisor** | Inspects shared state and routes the early work (research → first draft). | LLM-based routing |
+| **Researcher** | Retrieves web results and fetches page text, keeping structured sources (title, URL, content) in state — provenance is preserved, not summarised away. | `web_search` (DuckDuckGo + page fetch) |
+| **Writer** | Transforms sources into a markdown report, **citing each claim `[n]`**; incorporates reviewer feedback on revisions. | LLM generation |
+| **Validate** | **Deterministic (no LLM).** Refuses drafts with no sources, no citations, or dangling citations. | plain Python |
+| **Reviewer** | Critiques the draft for accuracy, clarity, and completeness; issues an **ACCEPT** or **REVISE** verdict that deterministically ends or continues the loop. | LLM evaluation |
 
 ---
 
@@ -56,21 +63,24 @@ The system is a **state machine**. A single typed `AgentState` object flows thro
 | Field | Purpose |
 |---|---|
 | `messages` | Running conversation log (uses the `add_messages` reducer to append). |
-| `research_notes` | Findings produced by the Researcher. |
-| `draft` | Current report produced by the Writer. |
+| `sources` | Structured `{title, url, snippet, content}` retrieved by the Researcher — the evidence every claim must trace back to. |
+| `research_notes` | Numbered, URL-preserving view of the sources handed to the Writer. |
+| `draft` | Current report produced by the Writer, with inline `[n]` citations. |
 | `review_feedback` | Reviewer's critique; consumed and cleared by the Writer on each revision. |
+| `verdict` | Reviewer's `ACCEPT`/`REVISE` decision — persisted so routing is deterministic. |
+| `validation_error` | Set by the `validate` node when a draft isn't grounded; triggers refusal. |
 | `next_agent` | The Supervisor's routing decision. |
 | `revision_count` | Counts revision cycles; caps the loop at `MAX_REVISIONS` (3). |
 
 **Execution flow for one query:**
 
-1. **Supervisor** sees no notes → routes to **Researcher**.
-2. **Researcher** runs web search + summarize → writes `research_notes`.
-3. **Supervisor** sees notes but no draft → routes to **Writer**.
-4. **Writer** drafts a report → writes `draft`.
-5. **Supervisor** sees a draft → routes to **Reviewer**.
-6. **Reviewer** critiques → `ACCEPT` or `REVISE`.
-7. `REVISE` → back to **Writer** (loop); `ACCEPT` or max revisions reached → **END**.
+1. **Supervisor** sees no sources → routes to **Researcher**.
+2. **Researcher** searches + fetches pages → writes `sources` and `research_notes`.
+3. **Supervisor** sees sources but no draft → routes to **Writer**.
+4. **Writer** drafts a report citing `[n]` → writes `draft`.
+5. **Validate** (deterministic) checks grounding → `ungrounded` ends the run with a refusal; `grounded` → **Reviewer**.
+6. **Reviewer** critiques → `ACCEPT` or `REVISE` (verdict persisted to state).
+7. `REVISE` → back to **Writer** (loop); `ACCEPT` or `MAX_REVISIONS` → **END**.
 
 ---
 
@@ -85,6 +95,7 @@ The system is a **state machine**. A single typed `AgentState` object flows thro
 | LLM — OpenAI | GPT-4o via `langchain-openai` |
 | LLM — Anthropic | Claude Sonnet 4.5 via `langchain-anthropic` |
 | Web search | [DuckDuckGo](https://duckduckgo.com/) (`ddgs`) via `langchain-community` — no API key |
+| Page fetching | `httpx` + stdlib HTML parsing (best-effort, falls back to snippets) |
 | State & validation | [Pydantic v2](https://docs.pydantic.dev/) |
 | Configuration | `python-dotenv` |
 | Build backend | [Hatchling](https://hatch.pypa.io/) |
