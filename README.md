@@ -158,6 +158,34 @@ Set the provider with `LLM_PROVIDER` in `.env` and supply the matching key:
 
 ---
 
+## 🔭 Tracing (LangSmith)
+
+Every LLM call and graph transition can be traced to **[LangSmith](https://smith.langchain.com)** — the full `supervisor → researcher → writer → validate → reviewer` tree, token counts, latencies, and each node's inputs/outputs. It's **auto-instrumented**: no code wires it up, you just set env vars.
+
+**Setup (~2 min, free tier — no card):**
+
+1. Create a key at [smith.langchain.com](https://smith.langchain.com) → *Settings → API Keys → Create API Key* (`lsv2_...`).
+2. Add to your `.env`:
+   ```bash
+   LANGSMITH_TRACING=true
+   LANGSMITH_API_KEY=lsv2_your_key_here
+   LANGSMITH_PROJECT=langgraph-multi-agent   # optional; defaults to "default"
+   ```
+3. Run normally — the startup banner confirms it:
+   ```text
+   LangSmith tracing: ON (project='langgraph-multi-agent')
+   ```
+   Traces then appear in the LangSmith UI under that project.
+
+**How it works:** `.env` is loaded (`load_dotenv()` in `agents/config.py`) *before* the first LLM call, so LangChain/LangGraph pick up the vars and stream traces automatically. The only project code involved is the startup status line in `main.py` — the instrumentation is the framework's.
+
+**Notes:**
+- `langsmith` ships as a LangChain dependency, so **nothing extra to install**.
+- Leave `LANGSMITH_TRACING` unset/`false` until the key is in — enabling it without a valid key just fails to upload (and adds slight latency).
+- Older `LANGCHAIN_TRACING_V2` / `LANGCHAIN_API_KEY` names also work; the startup check honors both.
+
+---
+
 ## 📤 Example output
 
 ```text
