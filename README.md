@@ -15,6 +15,8 @@ It demonstrates the **supervisor / orchestrator-worker pattern** for agentic sys
 - **Live web research** — the Researcher retrieves keyless **DuckDuckGo** results and fetches the page text, carrying structured sources (title, URL, content) through the graph.
 - **Provider-agnostic LLM layer** — run on **Groq** (free, default), **Gemini**, **OpenAI**, or **Anthropic** by changing `LLM_PROVIDER`.
 - **Streaming output** — node-by-node progress is streamed to the terminal as the graph executes.
+- **Human-in-the-loop (opt-in)** — `--human-review` pauses the graph (LangGraph `interrupt` + a `MemorySaver` checkpointer) so a human makes the final accept/revise call, overriding the model's verdict. Resumes via `Command(resume=...)`.
+- **Observability** — LangSmith tracing auto-instruments every LLM/graph step when env vars are set; startup reports whether it's on.
 - **Zero-cost by default** — Groq's free tier + keyless search means it runs without any paid API or credit card.
 
 ---
@@ -131,6 +133,9 @@ uv run python main.py "What are the latest breakthroughs in quantum computing?"
 
 # Verbose mode prints the full output of every agent
 uv run python main.py --verbose "Explain the current state of nuclear fusion energy"
+
+# Human-in-the-loop: pause for your approve/revise decision before finishing
+uv run python main.py --human-review "How do I connect Langfuse to LangGraph?"
 ```
 
 ---
@@ -146,6 +151,8 @@ Set the provider with `LLM_PROVIDER` in `.env` and supply the matching key:
 | `GOOGLE_API_KEY` | If `gemini` | [Google AI Studio](https://aistudio.google.com) |
 | `OPENAI_API_KEY` | If `openai` | OpenAI |
 | `ANTHROPIC_API_KEY` | If `anthropic` | Anthropic |
+| `LLM_MODEL` | No | Override the provider's default model |
+| `LANGSMITH_TRACING` | No | Set to `true` (with `LANGSMITH_API_KEY`) to trace every step in [LangSmith](https://smith.langchain.com) |
 
 > Web search uses **DuckDuckGo** and requires **no API key**.
 

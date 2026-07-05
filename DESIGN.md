@@ -112,13 +112,17 @@ agent graph shouldn't be all model calls; some edges are boring, testable Python
 - **Scope & Limitations** section: this is a learning project; grounding ≠ source *truth*;
   future work below. Naming what you didn't do is a seniority signal.
 
-### Phase 3 — Optional, if you want the advanced-primitives signal 🔭
-Sequential, not required. Each is a documented "chapter":
-- **Human-in-the-loop:** add a checkpointer + `interrupt()` so the graph pauses for human
-  approve/revise instead of MAX_REVISIONS. Demonstrates persistence + checkpointing + HITL.
-- **Observability:** LangSmith (or OTel) tracing — the "glass box" screenshot for the README.
-- **Streaming:** `stream_mode="updates"` demo GIF.
-- **Subgraph:** refactor Researcher into its own compiled subgraph (plan → search → dedupe → summarize).
+### Phase 3 — Advanced orchestration primitives 🔭
+- ✅ **Human-in-the-loop (done):** `--human-review` builds the graph with a `human_review`
+  node that `interrupt()`s after the reviewer, so a human makes the final accept/revise
+  call (overriding the model's verdict). Requires a `MemorySaver` checkpointer + a
+  `thread_id`; `main.py` resumes via `Command(resume=...)`. Autonomous runs are unchanged
+  and need no checkpointer. Demonstrates persistence + checkpointing + HITL.
+- ✅ **Observability (done):** LangSmith auto-instruments every LLM/graph step via env vars
+  (`LANGSMITH_TRACING` + `LANGSMITH_API_KEY`); `main.py` prints tracing status at startup,
+  and `.env-template` documents the setup. No code wraps it — that's the point.
+- ⏭️ **Streaming:** `stream_mode="updates"` demo GIF (not done).
+- ⏭️ **Subgraph:** refactor Researcher into its own compiled subgraph (not done).
 
 ---
 

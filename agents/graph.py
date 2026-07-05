@@ -20,8 +20,10 @@ import re
 from typing import Annotated, Literal
 
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage
+from langgraph.checkpoint.memory import MemorySaver
 from langgraph.graph import END, StateGraph
 from langgraph.graph.message import add_messages
+from langgraph.types import interrupt
 from pydantic import BaseModel, Field
 
 from agents.config import get_llm
@@ -247,6 +249,44 @@ def reviewer_node(state: AgentState) -> dict:
 
 
 # ---------------------------------------------------------------------------
+# Human-in-the-loop (optional)
+# ---------------------------------------------------------------------------
+
+
+def human_review_node(state: AgentState) -> dict:
+    """Pause the graph and let a human make the final accept/revise call.
+
+    Uses LangGraph's ``interrupt``: execution stops here and the payload is
+    surfaced to the client, which resumes the run with the human's decision via
+    ``Command(resume=...)``. The AI reviewer's critique is included so the human
+    decides *with* the model's opinion, not blind. The human's verdict overrides
+    the model's, then the existing ``route_after_review`` handles the routing.
+    """
+    decision = interrupt(
+        {
+            "draft": state.draft,
+            "reviewer_verdict": state.verdict,
+            "reviewer_feedback": state.review_feedback,
+            "revision_count": state.revision_count,
+            "max_revisions": MAX_REVISIONS,
+        }
+    )
+
+    action = (decision or {}).get("action", "approve")
+    if action == "revise":
+        feedback = (decision or {}).get("feedback", "").strip() or "Please revise the draft."
+        return {
+            "verdict": "REVISE",
+            "review_feedback": feedback,
+            "messages": [AIMessage(content="[Human] Requested revision.")],
+        }
+    return {
+        "verdict": "ACCEPT",
+        "messages": [AIMessage(content="[Human] Approved the draft.")],
+    }
+
+
+# ---------------------------------------------------------------------------
 # Validation (deterministic grounding gate)
 # ---------------------------------------------------------------------------
 
@@ -330,8 +370,16 @@ def route_after_validate(state: AgentState) -> Literal["reviewer", "__end__"]:
 # ---------------------------------------------------------------------------
 
 
-def build_graph() -> StateGraph:
-    """Construct and compile the multi-agent research graph."""
+def build_graph(human_in_the_loop: bool = False):
+    """Construct and compile the multi-agent research graph.
+
+    When ``human_in_the_loop`` is True, a ``human_review`` node is inserted after
+    the reviewer: the graph pauses (``interrupt``) so a human makes the final
+    accept/revise decision. That requires a checkpointer, so the compiled graph
+    must be invoked with a ``configurable.thread_id`` and resumed via
+    ``Command(resume=...)``. When False (the default), the run is fully
+    autonomous and needs no thread config.
+    """
     graph = StateGraph(AgentState)
 
     # Add nodes
@@ -340,6 +388,8 @@ def build_graph() -> StateGraph:
     graph.add_node("writer", writer_node)
     graph.add_node("validate", validate_node)
     graph.add_node("reviewer", reviewer_node)
+    if human_in_the_loop:
+        graph.add_node("human_review", human_review_node)
 
     # Entry point
     graph.set_entry_point("supervisor")
@@ -371,10 +421,17 @@ def build_graph() -> StateGraph:
         },
     )
 
-    # The reviewer decides termination deterministically -- accept ends the run,
-    # revise loops back to the writer -- without a supervisor round-trip.
+    # Termination is deterministic via route_after_review (accept/cap -> END,
+    # revise -> writer). With HITL, a human_review node sits before that routing
+    # so a person makes the accept/revise call (overriding the model's verdict);
+    # without it, the reviewer's own verdict decides.
+    if human_in_the_loop:
+        graph.add_edge("reviewer", "human_review")
+        route_source = "human_review"
+    else:
+        route_source = "reviewer"
     graph.add_conditional_edges(
-        "reviewer",
+        route_source,
         route_after_review,
         {
             "writer": "writer",
@@ -382,4 +439,6 @@ def build_graph() -> StateGraph:
         },
     )
 
-    return graph.compile()
+    # A checkpointer is required for interrupt/resume; only needed for HITL.
+    checkpointer = MemorySaver() if human_in_the_loop else None
+    return graph.compile(checkpointer=checkpointer)
