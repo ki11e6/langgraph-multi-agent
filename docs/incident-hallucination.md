@@ -39,8 +39,9 @@ fluency (polish on the wrong answer).
 
 1. `web_search` returns **structured sources** `{title, url, snippet, content}`
    and fetches the actual page text — provenance is preserved, not summarised away.
-2. `sources` are carried in graph state; the Writer must **cite each claim `[n]`**
-   and is instructed not to invent APIs/versions absent from the sources.
+2. `sources` are carried in graph state; the Writer must **cite each claim `[^n]`**
+   (footnote markers, so plain brackets like `[404]` in prose aren't mistaken for
+   citations) and is instructed not to invent APIs/versions absent from the sources.
 3. A **deterministic `validate` node** (plain Python, no LLM) sits between the
    Writer and Reviewer and refuses any draft with no sources, no citations, or a
    citation pointing at a source that doesn't exist.
@@ -54,12 +55,12 @@ gate, and cites them inline:
 ```
 ## Overview
 Langfuse is an open-source LLM-engineering platform that lets teams trace API
-calls, manage prompts, and run evaluations [4][5]. ...
+calls, manage prompts, and run evaluations [^4][^5]. ...
 
 ## Observability for LangGraph
 LangGraph ... Langfuse provides first-class observability for LangGraph
 pipelines, and the official integration is documented on the LangChain
-Providers → Langfuse page [4]. ...
+Providers → Langfuse page [^4]. ...
 
 ## Sources
 [1] Open Source Observability for LangGraph - Langfuse — https://langfuse.com/guides/cookbook/integration_langgraph

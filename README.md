@@ -10,7 +10,7 @@ It demonstrates the **supervisor / orchestrator-worker pattern** for agentic sys
 
 - **Multi-agent orchestration** — cooperating agents modeled as nodes in a LangGraph `StateGraph`.
 - **Dynamic supervisor routing** — a coordinator node decides which agent runs next based on shared state, instead of a brittle hard-coded pipeline.
-- **Grounded, cite-or-refuse output** — the Writer must cite retrieved sources inline (`[n]`); a **deterministic `validate` node** refuses to ship a draft that has no sources, no citations, or citations pointing at sources that don't exist. See the [incident write-up](docs/incident-hallucination.md) for *why*.
+- **Grounded, cite-or-refuse output** — the Writer must cite retrieved sources with footnote markers (`[^n]`); a **deterministic `validate` node** refuses to ship a draft that has no sources, no citations, or citations pointing at sources that don't exist (or that were retrieved empty). See the [incident write-up](docs/incident-hallucination.md) for *why*.
 - **Iterative refinement** — the Writer and Reviewer loop until the draft is accepted or `MAX_REVISIONS` is reached; termination is decided deterministically, so the loop provably halts.
 - **Live web research** — the Researcher retrieves keyless **DuckDuckGo** results and fetches the page text, carrying structured sources (title, URL, content) through the graph.
 - **Provider-agnostic LLM layer** — run on **Groq** (free, default), **Gemini**, **OpenAI**, or **Anthropic** by changing `LLM_PROVIDER`.
@@ -48,8 +48,8 @@ Two design choices worth calling out:
 |---|---|---|
 | **Supervisor** | Inspects shared state and routes the early work (research → first draft). | LLM-based routing |
 | **Researcher** | Retrieves web results and fetches page text, keeping structured sources (title, URL, content) in state — provenance is preserved, not summarised away. | `web_search` (DuckDuckGo + page fetch) |
-| **Writer** | Transforms sources into a markdown report, **citing each claim `[n]`**; incorporates reviewer feedback on revisions. | LLM generation |
-| **Validate** | **Deterministic (no LLM).** Refuses drafts with no sources, no citations, or dangling citations. | plain Python |
+| **Writer** | Transforms sources into a markdown report, **citing each claim `[^n]`**; incorporates reviewer feedback on revisions. | LLM generation |
+| **Validate** | **Deterministic (no LLM).** Refuses drafts with no sources, no citations, dangling citations, or citations to empty-content sources. | plain Python |
 | **Reviewer** | Critiques the draft for accuracy, clarity, and completeness; issues an **ACCEPT** or **REVISE** verdict that deterministically ends or continues the loop. | LLM evaluation |
 
 ---
@@ -65,7 +65,7 @@ The system is a **state machine**. A single typed `AgentState` object flows thro
 | `messages` | Running conversation log (uses the `add_messages` reducer to append). |
 | `sources` | Structured `{title, url, snippet, content}` retrieved by the Researcher — the evidence every claim must trace back to. |
 | `research_notes` | Numbered, URL-preserving view of the sources handed to the Writer. |
-| `draft` | Current report produced by the Writer, with inline `[n]` citations. |
+| `draft` | Current report produced by the Writer, with footnote `[^n]` citations. |
 | `review_feedback` | Reviewer's critique; consumed and cleared by the Writer on each revision. |
 | `verdict` | Reviewer's `ACCEPT`/`REVISE` decision — persisted so routing is deterministic. |
 | `validation_error` | Set by the `validate` node when a draft isn't grounded; triggers refusal. |
@@ -77,7 +77,7 @@ The system is a **state machine**. A single typed `AgentState` object flows thro
 1. **Supervisor** sees no sources → routes to **Researcher**.
 2. **Researcher** searches + fetches pages → writes `sources` and `research_notes`.
 3. **Supervisor** sees sources but no draft → routes to **Writer**.
-4. **Writer** drafts a report citing `[n]` → writes `draft`.
+4. **Writer** drafts a report citing `[^n]` → writes `draft`.
 5. **Validate** (deterministic) checks grounding → `ungrounded` ends the run with a refusal; `grounded` → **Reviewer**.
 6. **Reviewer** critiques → `ACCEPT` or `REVISE` (verdict persisted to state).
 7. `REVISE` → back to **Writer** (loop); `ACCEPT` or `MAX_REVISIONS` → **END**.
