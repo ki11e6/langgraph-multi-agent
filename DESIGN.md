@@ -115,9 +115,10 @@ agent graph shouldn't be all model calls; some edges are boring, testable Python
 ### Phase 3 — Advanced orchestration primitives 🔭
 - ✅ **Human-in-the-loop (done):** `--human-review` builds the graph with a `human_review`
   node that `interrupt()`s after the reviewer, so a human makes the final accept/revise
-  call (overriding the model's verdict). Requires a `MemorySaver` checkpointer + a
-  `thread_id`; `main.py` resumes via `Command(resume=...)`. Autonomous runs are unchanged
-  and need no checkpointer. Demonstrates persistence + checkpointing + HITL.
+  call (overriding the model's verdict). A dedicated `route_after_human` honors the human
+  even past `MAX_REVISIONS` (a human bounds the loop; the recursion limit is the backstop).
+  Requires a `MemorySaver` checkpointer + a `thread_id`; `main.py` resumes via
+  `Command(resume=...)`. Autonomous runs are unchanged and need no checkpointer.
 - ✅ **Observability (done):** LangSmith auto-instruments every LLM/graph step via env vars
   (`LANGSMITH_TRACING` + `LANGSMITH_API_KEY`); `main.py` prints tracing status at startup,
   and `.env-template` documents the setup. No code wraps it — that's the point.

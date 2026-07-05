@@ -15,7 +15,7 @@ It demonstrates the **supervisor / orchestrator-worker pattern** for agentic sys
 - **Live web research** — the Researcher retrieves keyless **DuckDuckGo** results and fetches the page text, carrying structured sources (title, URL, content) through the graph.
 - **Provider-agnostic LLM layer** — run on **Groq** (free, default), **Gemini**, **OpenAI**, or **Anthropic** by changing `LLM_PROVIDER`.
 - **Streaming output** — node-by-node progress is streamed to the terminal as the graph executes.
-- **Human-in-the-loop (opt-in)** — `--human-review` pauses the graph (LangGraph `interrupt` + a `MemorySaver` checkpointer) so a human makes the final accept/revise call, overriding the model's verdict. Resumes via `Command(resume=...)`.
+- **Human-in-the-loop (opt-in)** — `--human-review` pauses the graph (LangGraph `interrupt` + a `MemorySaver` checkpointer) so a human makes the final accept/revise call, overriding the model's verdict. Because a human bounds the loop, a "revise" is honored even past `MAX_REVISIONS`. Resumes via `Command(resume=...)`.
 - **Observability** — LangSmith tracing auto-instruments every LLM/graph step when env vars are set; startup reports whether it's on.
 - **Zero-cost by default** — Groq's free tier + keyless search means it runs without any paid API or credit card.
 
@@ -265,11 +265,11 @@ langgraph-multi-agent/
 
 ## 🗺️ Possible extensions
 
-- **Human-in-the-loop** — pause before the Reviewer using LangGraph's `interrupt_before` + a checkpointer to let a human inject feedback.
-- **Persistence** — add a checkpointer (e.g. `MemorySaver` or a database) to pause/resume runs and support multi-turn sessions.
+- **Semantic grounding** — the `validate` gate checks that citations *resolve*, not that the source text actually *supports* the claim; an entailment / LLM-as-judge check would close that gap.
 - **Structured routing** — replace prose-based verdict parsing with structured output (function calling / Pydantic schemas) for more reliable control flow.
-- **Parallel research** — fan out multiple search queries concurrently and merge results.
-- **Test suite** — unit tests for nodes/routing and an integration test for the full graph.
+- **Durable persistence** — swap the in-memory `MemorySaver` for a SQLite/Postgres checkpointer to pause/resume across restarts and support multi-turn sessions.
+- **Concurrent research** — fan out searches and page fetches concurrently (currently sequential).
+- **Bounded supervisor** — add an explicit hop counter (today only the writer↔reviewer loop is capped by `MAX_REVISIONS`).
 
 ---
 
