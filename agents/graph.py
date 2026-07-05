@@ -259,8 +259,10 @@ def human_review_node(state: AgentState) -> dict:
     Uses LangGraph's ``interrupt``: execution stops here and the payload is
     surfaced to the client, which resumes the run with the human's decision via
     ``Command(resume=...)``. The AI reviewer's critique is included so the human
-    decides *with* the model's opinion, not blind. The human's verdict overrides
-    the model's, then the existing ``route_after_review`` handles the routing.
+    decides *with* the model's opinion, not blind. Routing then goes through
+    ``route_after_human``, which honors the human's decision — a "revise" loops
+    back to the writer even past ``MAX_REVISIONS`` (a human bounds the loop, so
+    the autonomous cap doesn't apply).
     """
     decision = interrupt(
         {
@@ -272,9 +274,12 @@ def human_review_node(state: AgentState) -> dict:
         }
     )
 
-    action = (decision or {}).get("action", "approve")
+    # The resume value is externally supplied; tolerate anything non-dict.
+    if not isinstance(decision, dict):
+        decision = {}
+    action = decision.get("action", "approve")
     if action == "revise":
-        feedback = (decision or {}).get("feedback", "").strip() or "Please revise the draft."
+        feedback = decision.get("feedback", "").strip() or "Please revise the draft."
         return {
             "verdict": "REVISE",
             "review_feedback": feedback,
@@ -365,6 +370,18 @@ def route_after_validate(state: AgentState) -> Literal["reviewer", "__end__"]:
     return "reviewer"
 
 
+def route_after_human(state: AgentState) -> Literal["writer", "__end__"]:
+    """Route on the human's decision only.
+
+    Unlike ``route_after_review``, this ignores ``MAX_REVISIONS``: a human is
+    driving the loop, so their "revise" is honored regardless of the autonomous
+    cap. LangGraph's recursion limit remains the ultimate backstop.
+    """
+    if state.verdict == "ACCEPT":
+        return END
+    return "writer"
+
+
 # ---------------------------------------------------------------------------
 # Graph assembly
 # ---------------------------------------------------------------------------
@@ -421,23 +438,23 @@ def build_graph(human_in_the_loop: bool = False):
         },
     )
 
-    # Termination is deterministic via route_after_review (accept/cap -> END,
-    # revise -> writer). With HITL, a human_review node sits before that routing
-    # so a person makes the accept/revise call (overriding the model's verdict);
-    # without it, the reviewer's own verdict decides.
+    # Termination is deterministic. Autonomous: the reviewer's verdict drives
+    # route_after_review (accept/cap -> END, revise -> writer). HITL: a
+    # human_review node makes the call and route_after_human honors it (revise
+    # loops even past MAX_REVISIONS, since a human bounds the loop).
     if human_in_the_loop:
         graph.add_edge("reviewer", "human_review")
-        route_source = "human_review"
+        graph.add_conditional_edges(
+            "human_review",
+            route_after_human,
+            {"writer": "writer", END: END},
+        )
     else:
-        route_source = "reviewer"
-    graph.add_conditional_edges(
-        route_source,
-        route_after_review,
-        {
-            "writer": "writer",
-            END: END,
-        },
-    )
+        graph.add_conditional_edges(
+            "reviewer",
+            route_after_review,
+            {"writer": "writer", END: END},
+        )
 
     # A checkpointer is required for interrupt/resume; only needed for HITL.
     checkpointer = MemorySaver() if human_in_the_loop else None

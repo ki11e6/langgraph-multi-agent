@@ -20,14 +20,21 @@ def _tracing_status() -> str:
         os.getenv("LANGSMITH_TRACING", "").lower() in truthy
         or os.getenv("LANGCHAIN_TRACING_V2", "").lower() in truthy
     )
-    if enabled:
+    has_key = bool(os.getenv("LANGSMITH_API_KEY") or os.getenv("LANGCHAIN_API_KEY"))
+    if enabled and has_key:
         project = os.getenv("LANGSMITH_PROJECT") or os.getenv("LANGCHAIN_PROJECT") or "default"
         return f"LangSmith tracing: ON (project={project!r})"
+    if enabled and not has_key:
+        return "LangSmith tracing: enabled but LANGSMITH_API_KEY is not set — traces won't upload"
     return "LangSmith tracing: off (set LANGSMITH_TRACING=true + LANGSMITH_API_KEY to enable)"
 
 
 def _prompt_human(payload: dict) -> dict:
-    """Show the draft + AI critique and ask the human to approve or revise."""
+    """Show the draft + AI critique and ask the human to approve or revise.
+
+    Re-prompts on unrecognized input (never silently approves). Lets EOFError /
+    KeyboardInterrupt propagate so the caller can abort cleanly.
+    """
     print(f"\n{'=' * 60}")
     print("  🧑 HUMAN REVIEW — graph paused for your decision")
     print(f"{'=' * 60}")
@@ -38,11 +45,14 @@ def _prompt_human(payload: dict) -> dict:
     feedback = payload.get("reviewer_feedback") or ""
     if feedback:
         print(f"\nAI reviewer notes:\n{feedback[:800]}")
-    choice = input("\n  [a]pprove / [r]evise: ").strip().lower()
-    if choice.startswith("r"):
-        note = input("  Revision instructions (optional): ").strip()
-        return {"action": "revise", "feedback": note}
-    return {"action": "approve"}
+    while True:
+        choice = input("\n  [a]pprove / [r]evise: ").strip().lower()
+        if choice in {"a", "approve"}:
+            return {"action": "approve"}
+        if choice in {"r", "revise"}:
+            note = input("  Revision instructions (optional): ").strip()
+            return {"action": "revise", "feedback": note}
+        print("  Please enter 'a' (approve) or 'r' (revise).")
 
 
 def main() -> None:
@@ -77,7 +87,13 @@ def main() -> None:
 
     graph = build_graph(human_in_the_loop=args.human_review)
     # HITL needs a checkpointer thread to pause/resume; autonomous runs don't.
-    config = {"configurable": {"thread_id": "cli-session"}} if args.human_review else None
+    # A higher recursion limit gives the human room for many revise cycles
+    # (route_after_human ignores MAX_REVISIONS) before the backstop trips.
+    config = (
+        {"configurable": {"thread_id": "cli-session"}, "recursion_limit": 100}
+        if args.human_review
+        else None
+    )
 
     # Stream node-by-node so the user sees progress, capturing the latest draft
     # and any grounding refusal as they flow by. When the graph interrupts for
@@ -131,6 +147,11 @@ def main() -> None:
         print(f"{'=' * 60}\n")
         print(f"Query: {args.query!r}")
         print("The agents did not converge within the step limit.")
+        sys.exit(1)
+    except (EOFError, KeyboardInterrupt):
+        # No interactive input available (piped/closed stdin) or user aborted at
+        # the human-review prompt. Exit cleanly rather than dumping a traceback.
+        print("\n\n[!] Human review aborted (no input) — no answer produced.")
         sys.exit(1)
 
     # Refuse rather than ship an ungrounded answer.
