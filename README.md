@@ -189,27 +189,40 @@ Every LLM call and graph transition can be traced to **[LangSmith](https://smith
 ## 📤 Example output
 
 ```text
-$ uv run python main.py "Compare React and Svelte for building modern web apps"
+$ uv run python main.py "How do I connect Langfuse to LangGraph?"
 
 ============================================================
-  Research query: Compare React and Svelte for building modern web apps
+  Research query: How do I connect Langfuse to LangGraph?
+  LangSmith tracing: off (set LANGSMITH_TRACING=true + LANGSMITH_API_KEY to enable)
 ============================================================
 
---- [SUPERVISOR] ---  [Supervisor] Routing to: researcher
---- [RESEARCHER] ---  [Researcher] Gathered notes: ...
---- [SUPERVISOR] ---  [Supervisor] Routing to: writer
---- [WRITER] ---      [Writer] Draft produced (2847 chars)
---- [SUPERVISOR] ---  [Supervisor] Routing to: reviewer
---- [REVIEWER] ---    [Reviewer] Verdict: ACCEPT
---- [SUPERVISOR] ---  [Supervisor] Routing to: FINISH
+--- [SUPERVISOR] ---   [Supervisor] Routing to: researcher
+--- [RESEARCHER] ---   [Researcher] Retrieved 5 source(s).
+--- [SUPERVISOR] ---   [Supervisor] Routing to: writer
+--- [WRITER] ---       [Writer] Draft produced (2740 chars)
+--- [VALIDATE] ---     [Validate] grounded
+--- [REVIEWER] ---     [Reviewer] Verdict: REVISE
+--- [WRITER] ---       [Writer] Draft produced (5606 chars)
+--- [VALIDATE] ---     [Validate] grounded
+--- [REVIEWER] ---     [Reviewer] Verdict: ACCEPT
 
 ============================================================
   FINAL REPORT
 ============================================================
 
-## React vs. Svelte: A Comparative Analysis
-...
+## Overview
+Langfuse is an open-source LLM-engineering platform that traces API calls,
+manages prompts, and runs evaluations [^4][^5]. ...
+
+## Sources
+[1] Open Source Observability for LangGraph - Langfuse — https://langfuse.com/guides/cookbook/integration_langgraph
+[4] Langfuse integrations - Docs by LangChain — https://docs.langchain.com/oss/python/integrations/providers/langfuse
+[5] Get Started - Langfuse — https://langfuse.com/docs/observability/get-started
 ```
+
+> Every claim carries a `[^n]` citation and the run ends with a `## Sources` list.
+> If nothing can be grounded, the tool prints an **INSUFFICIENT GROUNDING** notice
+> and exits non-zero instead of inventing an answer.
 
 ---
 
