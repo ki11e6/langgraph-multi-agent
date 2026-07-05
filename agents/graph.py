@@ -25,7 +25,7 @@ from langgraph.graph.message import add_messages
 from pydantic import BaseModel, Field
 
 from agents.config import get_llm
-from agents.tools import summarize, web_search
+from agents.tools import web_search
 
 # ---------------------------------------------------------------------------
 # State
@@ -64,6 +64,8 @@ class AgentState(BaseModel):
     next_agent: str = "researcher"
     revision_count: int = 0
     verdict: str = ""
+    sources: list[dict] = Field(default_factory=list)
+    validation_error: str = ""
 
 
 # ---------------------------------------------------------------------------
@@ -126,18 +128,30 @@ def supervisor_node(state: AgentState) -> dict:
 
 
 def researcher_node(state: AgentState) -> dict:
-    """Use tools to research the user's query."""
+    """Retrieve grounded sources for the query.
+
+    We deliberately do NOT summarise into prose here: the old pipeline ran the
+    search results through an LLM summariser, which discarded the source URLs and
+    left every downstream agent ungrounded (the cause of confident hallucination).
+    Instead we keep structured sources in state and build notes that preserve each
+    source's index and URL, so the Writer can cite ``[n]`` and the ``validate``
+    node can verify grounding.
+    """
     query = state.messages[0].content if state.messages else "general research"
+    sources = web_search.invoke(query)
 
-    # Step 1 -- web search
-    search_results = web_search.invoke(query)
-
-    # Step 2 -- summarise findings
-    summary = summarize.invoke(search_results)
+    notes_parts = [
+        f"[{i}] {s.get('title', 'Untitled')}\n"
+        f"URL: {s.get('url', '')}\n"
+        f"{s.get('content', '')}"
+        for i, s in enumerate(sources, 1)
+    ]
+    notes = "\n\n".join(notes_parts) if notes_parts else "No sources found."
 
     return {
-        "research_notes": summary,
-        "messages": [AIMessage(content=f"[Researcher] Gathered notes:\n{summary}")],
+        "sources": sources,
+        "research_notes": notes,
+        "messages": [AIMessage(content=f"[Researcher] Retrieved {len(sources)} source(s).")],
     }
 
 
@@ -154,9 +168,16 @@ def writer_node(state: AgentState) -> dict:
 
     system = SystemMessage(
         content=(
-            "You are a skilled technical writer.  Using the research notes "
-            "provided, write a clear, well-structured report (3-5 paragraphs). "
-            "Use markdown formatting."
+            "You are a skilled technical writer. Write a clear, well-structured "
+            "report (3-5 paragraphs, markdown) using ONLY the numbered sources in "
+            "the research notes.\n"
+            "Rules:\n"
+            "  - Support every factual claim with an inline citation like [1] or "
+            "[2] referring to a source by its number.\n"
+            "  - Do NOT invent APIs, class names, version numbers, or facts that "
+            "are not present in the sources. If the sources do not cover something, "
+            "say so explicitly rather than guessing.\n"
+            "  - Only cite source numbers that actually exist in the notes."
             + revision_context
         )
     )
@@ -223,6 +244,42 @@ def reviewer_node(state: AgentState) -> dict:
 
 
 # ---------------------------------------------------------------------------
+# Validation (deterministic grounding gate)
+# ---------------------------------------------------------------------------
+
+
+def validate_node(state: AgentState) -> dict:
+    """Deterministically check that the draft is grounded in retrieved sources.
+
+    This is plain Python, not an LLM call, on purpose: the LLM *proposes* a draft,
+    but code *disposes* on whether it may ship. It catches the exact failure that
+    made this project hallucinate -- a confident report with no sources, no
+    citations, or citations pointing at sources that don't exist.
+    """
+    if not state.sources:
+        error = "No sources were retrieved, so no grounded answer can be produced."
+    else:
+        cited = {int(n) for n in re.findall(r"\[(\d+)\]", state.draft)}
+        n_sources = len(state.sources)
+        if not cited:
+            error = "The draft contains no citations to any source."
+        elif any(n < 1 or n > n_sources for n in cited):
+            dangling = sorted(n for n in cited if n < 1 or n > n_sources)
+            error = (
+                f"The draft cites non-existent source(s) {dangling} "
+                f"(only {n_sources} retrieved)."
+            )
+        else:
+            error = ""
+
+    verdict = "grounded" if not error else "ungrounded"
+    return {
+        "validation_error": error,
+        "messages": [AIMessage(content=f"[Validate] {verdict}" + (f": {error}" if error else ""))],
+    }
+
+
+# ---------------------------------------------------------------------------
 # Routing helpers
 # ---------------------------------------------------------------------------
 
@@ -250,6 +307,13 @@ def route_after_review(state: AgentState) -> Literal["writer", "__end__"]:
     return "writer"
 
 
+def route_after_validate(state: AgentState) -> Literal["reviewer", "__end__"]:
+    """Refuse (END) if the draft isn't grounded; otherwise send it to review."""
+    if state.validation_error:
+        return END
+    return "reviewer"
+
+
 # ---------------------------------------------------------------------------
 # Graph assembly
 # ---------------------------------------------------------------------------
@@ -263,6 +327,7 @@ def build_graph() -> StateGraph:
     graph.add_node("supervisor", supervisor_node)
     graph.add_node("researcher", researcher_node)
     graph.add_node("writer", writer_node)
+    graph.add_node("validate", validate_node)
     graph.add_node("reviewer", reviewer_node)
 
     # Entry point
@@ -280,9 +345,20 @@ def build_graph() -> StateGraph:
         },
     )
 
-    # Researcher and writer report back to the supervisor for sequencing.
+    # The researcher reports back to the supervisor for sequencing.
     graph.add_edge("researcher", "supervisor")
-    graph.add_edge("writer", "supervisor")
+
+    # Every draft passes through the deterministic grounding gate before review.
+    # Ungrounded drafts end the run (refusal); grounded drafts go to the reviewer.
+    graph.add_edge("writer", "validate")
+    graph.add_conditional_edges(
+        "validate",
+        route_after_validate,
+        {
+            "reviewer": "reviewer",
+            END: END,
+        },
+    )
 
     # The reviewer decides termination deterministically -- accept ends the run,
     # revise loops back to the writer -- without a supervisor round-trip.

@@ -153,7 +153,7 @@ def _role_aware_llm(messages):
     if "meticulous editor" in system:
         return AIMessage(content="Not there yet.\nREVISE")  # never accepts on its own
     if "skilled technical writer" in system:
-        return AIMessage(content="A draft paragraph.")
+        return AIMessage(content="A draft paragraph grounded in a source [1].")
     return AIMessage(content="FINISH")
 
 
@@ -175,8 +175,8 @@ def test_graph_terminates_without_recursion_error(monkeypatch):
         "get_llm",
         lambda: type("LLM", (), {"invoke": staticmethod(_role_aware_llm)})(),
     )
-    monkeypatch.setattr(graph_module, "web_search", _FakeTool("raw search results"))
-    monkeypatch.setattr(graph_module, "summarize", _FakeTool("condensed notes"))
+    one_source = [{"title": "T", "url": "https://ex/1", "snippet": "s", "content": "c"}]
+    monkeypatch.setattr(graph_module, "web_search", _FakeTool(one_source))
 
     app = build_graph()
     final = app.invoke({"messages": [HumanMessage(content="test query")]})
@@ -200,7 +200,7 @@ def test_graph_ends_early_on_accept(monkeypatch):
         if "meticulous editor" in system:
             return AIMessage(content="Looks great.\nACCEPT")  # accepts first pass
         if "skilled technical writer" in system:
-            return AIMessage(content="A draft paragraph.")
+            return AIMessage(content="A draft paragraph grounded in a source [1].")
         return AIMessage(content="FINISH")
 
     monkeypatch.setattr(
@@ -208,8 +208,8 @@ def test_graph_ends_early_on_accept(monkeypatch):
         "get_llm",
         lambda: type("LLM", (), {"invoke": staticmethod(accepting_llm)})(),
     )
-    monkeypatch.setattr(graph_module, "web_search", _FakeTool("raw search results"))
-    monkeypatch.setattr(graph_module, "summarize", _FakeTool("condensed notes"))
+    one_source = [{"title": "T", "url": "https://ex/1", "snippet": "s", "content": "c"}]
+    monkeypatch.setattr(graph_module, "web_search", _FakeTool(one_source))
 
     final = build_graph().invoke({"messages": [HumanMessage(content="test query")]})
 

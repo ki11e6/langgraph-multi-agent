@@ -1063,6 +1063,7 @@ version = "0.1.0"
 source = { editable = "." }
 dependencies = [
     { name = "ddgs" },
+    { name = "httpx" },
     { name = "langchain-anthropic" },
     { name = "langchain-community" },
     { name = "langchain-google-genai" },
@@ -1082,6 +1083,7 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "ddgs", specifier = ">=9.0" },
+    { name = "httpx", specifier = ">=0.27" },
     { name = "langchain-anthropic", specifier = ">=0.2" },
     { name = "langchain-community", specifier = ">=0.3" },
     { name = "langchain-google-genai", specifier = ">=2.0" },
